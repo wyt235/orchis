@@ -1,3 +1,7 @@
+#folder
+.vscode/
+.ccls/
+
 # Prerequisites
 *.d
 
