@@ -25,7 +25,7 @@ hash: CHECK_DIR
 
 
 
-%.o : %.c 
+%.o : %.cc
 	$(CC) $(CFLAGS) -c $^ -o $@
 
 clean:

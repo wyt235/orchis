@@ -17,7 +17,7 @@ struct Test{
 
 const int testCount = 50000;
 static std::vector<Test> s_array;
-static std::unique_ptr<wyt::Hash<int, int>> s_hash(wyt::Hash<int,int>::create(32));
+static std::unique_ptr<wyt::Hash<int, int>> s_hash(new wyt::Hash<int,int>(16));
 
 static void generateTestCases(){
     int i;

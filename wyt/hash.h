@@ -1,12 +1,11 @@
 #ifndef _WYT_HASH_H
 #define _WYT_HASH_H
 
+#include <string>
 #include <cstdint>
 #include <cstring>
 #include <cassert>
 #include <bits/hash_bytes.h>
-#include <iostream>
-
 namespace wyt{
 
 
@@ -59,18 +58,37 @@ private:
             bucket = tmp;
         }
     }
+
+    static HashBucket* copyBucket(HashBucket* bucket){
+        HashBucket head, *iterator, *prev;
+        if(bucket == nullptr) return nullptr;
+        prev = &head;
+        iterator = new HashBucket;
+        while(bucket != nullptr){
+            prev = prev->next = iterator;
+            iterator->data = bucket->data;
+            iterator->hash = bucket->hash;
+            iterator->key = bucket->key;
+            bucket = bucket->next;
+        }
+        iterator->next = nullptr;
+        return head.next;
+    }
     
 
 public:
-    Hash() : Hash(2){}
+    Hash() : Hash(8){}
     Hash(int size){
-        int exponent = 1; //确定最小逻辑大小为8，最小实际大小为16
+        int real_size, exponent;        
+        exponent = 3; //确定最小逻辑大小为8，最小实际大小为16
         while( (1 << exponent) < size){
             exponent += 1;
         }
+        real_size = 2 << exponent;
+        this->m_buckets = new HashBucket* [real_size];
+        bzero(this->m_buckets, sizeof(HashBucket*) * real_size);
         this->m_split = 0;
         this->m_logical_exponent = exponent;
-        this->m_buckets = nullptr;
         this->m_seed = (uint64_t)this;
     }
     ~Hash(){
@@ -78,26 +96,54 @@ public:
         delete[] m_buckets;
     }
 
-
-    bool init(){
-        int size = 2 << m_logical_exponent;
-        if(m_buckets != nullptr)
-            return true;
-        m_buckets = new(std::nothrow) HashBucket* [size];
-        if(m_buckets == nullptr)
-            return false;
-        bzero(m_buckets, sizeof(HashBucket*) * size);
-        return true;
+    Hash(const Hash & other){
+        int i, real_size;
+        real_size = 2 << other.m_logical_exponent;
+        this->m_logical_exponent = other.m_logical_exponent;
+        this->m_seed = other.m_seed;
+        this->m_split = other.m_split;
+        this->m_buckets = new HashBucket*[real_size];
+        for(i = 0; i < real_size; ++i){
+            this->m_buckets[i] = copyBucket(other.m_buckets[i]);
+        }
     }
 
-    static Hash* create(int size){
-        Hash* hash;
-        hash = new(std::nothrow) Hash(size);
-        if(hash == nullptr || hash->init() == false){
-            delete hash;
-            return nullptr;
+    Hash(Hash && other){
+        this->m_buckets = other.m_buckets;
+        this->m_logical_exponent = other.m_logical_exponent;
+        this->m_seed = other.m_seed;
+        this->m_split = other.m_split;
+        other.m_buckets = nullptr;
+        other.m_split = 0;
+        other.m_logical_exponent = 0;
+        other.m_seed = 0;
+    }
+
+public:
+    _Value& operator[](const _Key& key){
+        uint64_t idx;
+        _Hash hashCalc;
+        HashBucket *bucket, *find, *prev;
+        assert(this->m_buckets != nullptr);
+
+        find = this->find(key, idx, &prev);
+        if(find != nullptr) return find->data;
+
+        if(m_split >= (uint32_t)(1 << m_logical_exponent))
+            this->realloc();
+
+        bucket = new HashBucket();
+        bucket->hash = hashCalc(key, m_seed);
+        bucket->key = key;
+
+        if(prev != nullptr){
+            bucket->next = prev->next;
+            prev->next = bucket;
+        }else{
+            bucket->next = nullptr;
+            m_buckets[idx] = bucket;
         }
-        return hash;
+        return bucket->data;
     }
 
 private:
@@ -106,20 +152,18 @@ private:
      * @brief 拓展容量
      * @return false -> 拓展失败
      */
-    bool realloc(){
+    void realloc(){
         int size;
         HashBucket **buckets;
         size = 2 << m_logical_exponent; //实际大小
         
-        buckets = new(std::nothrow) HashBucket*[size << 1];
-        if (buckets == NULL) return false;
+        buckets = new HashBucket* [size << 1];
         memset(buckets, 0, sizeof(HashBucket*) * (size << 1));
         memcpy(buckets, m_buckets, sizeof(HashBucket*) * size);
         delete[] m_buckets;
         m_buckets = buckets;
         m_logical_exponent += 1;
         m_split = 0;
-        return true;
     }
 
     void split(){
@@ -176,9 +220,11 @@ private:
 public:
     void clean(){
         int i, size;
+        if(m_buckets == nullptr) return;
         for(i = 0, size = 2 << m_logical_exponent; i < size; ++i){
             deleteBucket(m_buckets[i]);
         }
+        this->m_split = 0;
     }
 
 public:
@@ -186,15 +232,15 @@ public:
         uint64_t idx;
         _Hash hashCalc;
         HashBucket *bucket, *find, *prev;
+        assert(this->m_buckets != nullptr);
 
         find = this->find(key, idx, &prev);
         if(find != nullptr) return false;
 
-        if(m_split >= (uint32_t)(1 << m_logical_exponent) && this->realloc() == false)
-            return false;
+        if(m_split >= (uint32_t)(1 << m_logical_exponent))
+            this->realloc();
 
-        bucket = new(std::nothrow) HashBucket();
-        if(bucket == nullptr) return false;
+        bucket = new HashBucket();
         bucket->hash = hashCalc(key, m_seed);
         bucket->key = key;
         bucket->data = value;
@@ -212,6 +258,7 @@ public:
     void remove(const _Key & key){
         uint64_t idx;
         HashBucket *find, *prev;
+        assert(this->m_buckets != nullptr);
 
         if((find = this->find(key, idx, &prev)) == nullptr) return;
         if(prev){
@@ -226,6 +273,7 @@ public:
     bool modify(const _Key & key, const _Value& value){
         uint64_t idx;
         HashBucket *find, *prev;
+        assert(this->m_buckets != nullptr);
 
         if((find = this->find(key, idx, &prev)) == nullptr){
             return this->insert(key, value);
@@ -238,6 +286,7 @@ public:
     bool search(const _Key & key, _Value& value){
         uint64_t idx;
         HashBucket *find, *prev;
+        assert(this->m_buckets != nullptr);
 
         if((find = this->find(key, idx, &prev)) == nullptr)
             return false;
